@@ -228,7 +228,8 @@ def train_model(model, optimizer, scheduler, x_int_train, x_ic_train, rho_ic, u_
         loss_ic = model.loss_ic(x_ic_train, rho_ic, u_ic, p_ic)
 
         # Total loss: a weighted combination of PDE loss and IC loss
-        total_loss = 0.1 * loss_pde + 10 * loss_ic
+        # total_loss = 0.1 * loss_pde + 10 * loss_ic
+        total_loss = loss_pde + loss_ic
 
         # Print losses for monitoring
         print(f"Epoch {epoch:04d}: loss_pde = {loss_pde.item():.8f}, loss_ic = {loss_ic.item():.8f}, total_loss = {total_loss.item():.8f}")
