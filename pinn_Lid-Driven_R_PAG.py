@@ -30,7 +30,7 @@ def same_seed(seed):
 same_seed(42)
 
 # ==========================================
-# 1. Neural Network (保持不变)
+# 1. Neural Network
 # ==========================================
 class PINN(nn.Module):  
     def __init__(
@@ -68,7 +68,7 @@ class PINN(nn.Module):
         return u, v, p
 
 # ==========================================
-# 2. R-PAG V5.0 Solver (核心创新算法)
+# 2. R-PAG V5.0 Solver
 # ==========================================
 class LDC_RPAGSolver:
     def __init__(self, model, lr=1e-3):
@@ -111,9 +111,7 @@ class LDC_RPAGSolver:
         return g_low, False # 无冲突
 
     def compute_residuals_vector(self, X_f):
-        """
-        计算逐点的 PDE 残差向量 (不进行 mean 聚合)
-        """
+        """计算逐点的 PDE 残差向量"""
         X_f.requires_grad_(True)
         u, v, p = self.model(X_f)
         
@@ -139,7 +137,7 @@ class LDC_RPAGSolver:
         momentum_u = u*u_x + v*u_y + p_x - nu*(u_xx + u_yy) 
         momentum_v = u*v_x + v*v_y + p_y - nu*(v_xx + v_yy)
         
-        # 返回每个点的残差平方和 (Shape: [N])
+        # 返回每个点的残差平方和
         res_sq = continuity**2 + momentum_u**2 + momentum_v**2
         return res_sq
 
@@ -155,20 +153,19 @@ class LDC_RPAGSolver:
         
         is_proj = False
 
-        # === Warm-up 阶段 (像 Baseline 一样运行) ===
+        # === Warm-up 阶段 ===
         if not use_rpag:
-            # 直接相加，权重可以稍微给 BC 一点倾斜
             pde_loss = torch.mean(res_sq)
             loss = pde_loss + bc_loss * 10.0 
             loss.backward()
             self.optimizer.step()
             return loss.item(), False
 
-        # === R-PAG 阶段 (精修难点区域) ===
+        # === R-PAG 阶段 ===
         else:
             # 1. 动态分组
             res_abs = torch.sqrt(res_sq).detach()
-            threshold = torch.quantile(res_abs, 0.90) # Top 10% (通常是角点奇异区)
+            threshold = torch.quantile(res_abs, 0.90) # Top 10%
             
             mask_high = (res_abs >= threshold).float()
             mask_low = 1.0 - mask_high
@@ -177,8 +174,6 @@ class LDC_RPAGSolver:
             L_low = torch.sum(res_sq * mask_low) / (torch.sum(mask_low) + 1e-8)
             
             # 2. 梯度计算 
-            # 难点区域(High) + 边界(BC) 拥有高优先级
-            # 权重归一化：使用温和的倍率 (2.0 / 5.0)
             g_high_pde = self.get_gradients(L_high * 2.0)
             g_bc = self.get_gradients(bc_loss * 10.0) 
             
@@ -188,7 +183,7 @@ class LDC_RPAGSolver:
                 
             g_low = self.get_gradients(L_low * 1.0)
             
-            # 3. GCond (历史梯度平滑，仅对平滑区)
+            # 3. GCond
             g_low_stable = {}
             for name in g_low:
                 self.V_smooth[name] = self.beta * self.V_smooth[name] + (1 - self.beta) * g_low[name]
@@ -203,12 +198,11 @@ class LDC_RPAGSolver:
                 
             self.optimizer.step()
             
-            # 返回加权总 Loss 用于监控
             total_loss = L_high + L_low + bc_loss
             return total_loss.item(), is_proj
 
 # ==========================================
-# 3. Data Generation (保持不变)
+# 3. Data Generation
 # ==========================================
 N_f = 10000
 N_b = 2000
@@ -247,7 +241,7 @@ u_b = torch.cat([u_side, u_top], dim=0)
 v_b = torch.cat([v_side, v_top], dim=0)
 
 # ==========================================
-# 4. Main Training Loop (Updated)
+# 4. Main Training Loop
 # ==========================================
 model = PINN(
         input_size=2,
@@ -267,8 +261,7 @@ print(f">>> Start Training with R-PAG V5.0 (Warm-up included) <<<")
 start_time = time.time()
 
 for epoch in range(epochs):
-    # Warm-up 策略: 前 20% 轮次不开启 R-PAG，像普通 PINN 一样跑
-    # 这样可以先学出大轮廓，避免初期对噪声进行投影
+    # Warm-up 策略: 前 20% 轮次不开启 R-PAG
     if epoch < epochs * 0.2:
         use_rpag = False
     else:
@@ -284,50 +277,44 @@ for epoch in range(epochs):
     if epoch % 500 == 0:
         mode = "R-PAG" if use_rpag else "WarmUp"
         proj_str = "YES" if is_proj else "NO"
-        # 这里的 loss 可能会跳变，因为 R-PAG 模式下是加权 Loss，这是正常的
         print(f"Epoch {epoch:05d} | Mode: {mode} | Loss: {loss_val:.5f} | Proj: {proj_str}")
 
 print(f"Training finished in {time.time()-start_time:.2f}s")
 print(f"Best Loss: {best_loss:.5f}")
 
 # ==========================================
-# 5. Visualization (修正版)
+# 5. Visualization (修改为复现速度大小分布图)
 # ==========================================
-nx, ny = 50, 50
+# 增加分辨率以获得平滑的云图效果
+nx, ny = 200, 200 
 x = torch.linspace(x_min, x_max, nx, device=device)
 y = torch.linspace(y_min, y_max, ny, device=device)
 X, Y = torch.meshgrid(x, y, indexing='xy')
 XY = torch.stack([X.ravel(), Y.ravel()], -1)
 
-# 加载最佳模型
+# 加载模型
 model.load_state_dict(torch.load('models/model.ckpt', map_location=device, weights_only=True))
-
 model.eval()
+
 with torch.no_grad():
     u, v, p = model(XY)
-    # --- 关键修改：在这里直接转为 numpy ---
+    # 转换为 numpy 数组
     u = u.reshape(ny, nx).cpu().numpy()
     v = v.reshape(ny, nx).cpu().numpy()
-    p = p.reshape(ny, nx).cpu().numpy()
 
-# 绘制流线图
-plt.figure(figsize=(12, 5))
-
-# 子图 1: 流线图
-plt.subplot(1, 2, 1)
-# 现在 u, v 都是 numpy 数组，运算不会报错
+# 计算合速度大小
 speed = np.sqrt(u**2 + v**2)
-plt.streamplot(X.cpu().numpy(), Y.cpu().numpy(), u, v, density=2, color=speed, cmap='jet')
-plt.title('Predicted Velocity Field (Streamlines)')
-plt.xlim(x_min, x_max)
-plt.ylim(y_min, y_max)
-plt.colorbar(label='Velocity Magnitude')
 
-# 子图 2: 压力场
-plt.subplot(1, 2, 2)
-plt.contourf(X.cpu().numpy(), Y.cpu().numpy(), p, 100, cmap='viridis')
-plt.title('Predicted Pressure Field')
-plt.colorbar(label='Pressure')
+# 绘制速度大小分布图 (复现目标图片风格)
+plt.figure(figsize=(8, 6), dpi=100)
+# 使用 imshow 绘制热力图，cmap='jet' 对应蓝-红配色，origin='lower' 对应原点在左下角
+plt.imshow(speed, extent=[x_min, x_max, y_min, y_max], origin='lower', cmap='jet', interpolation='nearest')
 
+cbar = plt.colorbar()
+cbar.set_label('Speed Magnitude')
+
+plt.title('Velocity Magnitude Distribution')
+plt.xlabel('x')
+plt.ylabel('y')
 plt.tight_layout()
 plt.show()
